@@ -82,7 +82,7 @@
 
 set -euo pipefail
 
-sh_ver="1.26.0"
+sh_ver="1.27.0"
 sh_debug=0
 export LANG=en_US.UTF-8
 SH_LINK="https://raw.githubusercontent.com/woniuzfb/iptv/master/iptv.sh"
@@ -832,7 +832,7 @@ Uninstall()
 Update()
 {
     [ ! -e "$IPTV_ROOT" ] && Println "$error 尚未安装，请检查 !\n" && exit 1
-    if ls -A "/tmp/monitor.lockdir/"* > /dev/null 2>&1
+    if [ -s "$IPTV_ROOT/monitor.pid" ] || [ -s "$IPTV_ROOT/antiddos.pid" ]
     then
         Println "$info 需要先关闭监控，是否继续? [Y/n]"
         read -p "(默认: Y): " stop_monitor_yn
@@ -3622,19 +3622,14 @@ PrepTerm()
 {
     unset term_child_pid
     unset term_kill_needed
-    trap 'HandleTerm 2> /dev/null' TERM
+    trap 'HandleTerm' TERM
 }
 
 HandleTerm()
 {
     if [ -n "${term_child_pid:-}" ]
     then
-        if [ "${force_exit:-0}" -eq 1 ] 
-        then
-            kill -9 "$term_child_pid" || true
-        else
-            kill -TERM "$term_child_pid" || true
-        fi
+        kill -TERM "$term_child_pid" 2> /dev/null || true
     else
         term_kill_needed="yes"
     fi
@@ -3645,25 +3640,17 @@ WaitTerm()
     term_child_pid=$!
     if [ -n "${term_kill_needed:-}" ]
     then
-        if [ "${force_exit:-0}" -eq 1 ] 
-        then
-            kill -9 "$term_child_pid" || true
-        else
-            kill -TERM "$term_child_pid" || true
-        fi
+        kill -TERM "$term_child_pid" 2> /dev/null || true
     fi
-    wait $term_child_pid || true
+    wait $term_child_pid 2> /dev/null || true
     trap - TERM
-    wait $term_child_pid || true
+    wait $term_child_pid 2> /dev/null
 }
 
 FlvStreamCreatorWithShift()
 {
     trap '' HUP INT
     pid="$BASHPID"
-    force_exit=1
-    mkdir -p "/tmp/flv.lockdir"
-    echo > "/tmp/flv.lockdir/$pid"
     if [[ -n $($JQ_FILE '.channels[]|select(.pid=='"$pid"')' "$CHANNELS_FILE") ]] 
     then
         true &
@@ -3746,8 +3733,10 @@ FlvStreamCreatorWithShift()
                 chnl_pid=$pid
                 action="stop"
                 SyncFile > /dev/null 2>> "$MONITOR_LOG"
-                rm -f "/tmp/flv.lockdir/$pid"
             ' EXIT
+
+            exec {lock_fd}>"$FFMPEG_LOG_ROOT/$pid.lock" || exit 1
+            flock -n "$lock_fd" || { MonitorError "$channel_name $pid flock failed"; exit 1; }
 
             resolution=""
 
@@ -3865,8 +3854,10 @@ FlvStreamCreatorWithShift()
                 chnl_pid=$new_pid
                 action="stop"
                 SyncFile > /dev/null 2>> "$MONITOR_LOG"
-                rm -f "/tmp/flv.lockdir/$chnl_pid"
             ' EXIT
+
+            exec {lock_fd}>"$FFMPEG_LOG_ROOT/$new_pid.lock" || exit 1
+            flock -n "$lock_fd" || { MonitorError "$chnl_channel_name $new_pid flock failed"; exit 1; }
 
             resolution=""
 
@@ -4034,8 +4025,10 @@ FlvStreamCreatorWithShift()
                 chnl_pid=$pid
                 action="stop"
                 SyncFile > /dev/null 2>> "$MONITOR_LOG"
-                rm -f "/tmp/flv.lockdir/$pid"
             ' EXIT
+
+            exec {lock_fd}>"$FFMPEG_LOG_ROOT/$pid.lock" || exit 1
+            flock -n "$lock_fd" || { MonitorError "$channel_name $pid flock failed"; exit 1; }
 
             resolution=""
 
@@ -4138,7 +4131,6 @@ FlvStreamCreatorWithShift()
 HlsStreamCreatorPlus()
 {
     trap '' HUP INT
-    force_exit=1
     pid="$BASHPID"
     if [[ -n $($JQ_FILE '.channels[]|select(.pid=='"$pid"')' "$CHANNELS_FILE") ]] 
     then
@@ -4225,11 +4217,11 @@ HlsStreamCreatorPlus()
                 chnl_pid=$pid
                 action="stop"
                 SyncFile > /dev/null 2>> "$MONITOR_LOG"
-                until [ ! -d "$output_dir_root" ]
-                do
-                    rm -rf "$output_dir_root"
-                done
+                rm -rf $output_dir_root
             ' EXIT
+
+            exec {lock_fd}>"$FFMPEG_LOG_ROOT/$pid.lock" || exit 1
+            flock -n "$lock_fd" || { MonitorError "$channel_name $pid flock failed"; exit 1; }
 
             resolution=""
             output_name="${seg_name}_%05d"
@@ -4406,11 +4398,11 @@ HlsStreamCreatorPlus()
                 chnl_pid=$new_pid
                 action="stop"
                 SyncFile > /dev/null 2>> "$MONITOR_LOG"
-                until [ ! -d "$chnl_output_dir_root" ]
-                do
-                    rm -rf "$chnl_output_dir_root"
-                done
+                rm -rf $chnl_output_dir_root
             ' EXIT
+
+            exec {lock_fd}>"$FFMPEG_LOG_ROOT/$new_pid.lock" || exit 1
+            flock -n "$lock_fd" || { MonitorError "$chnl_channel_name $new_pid flock failed"; exit 1; }
 
             resolution=""
             output_name="${chnl_seg_name}_%05d"
@@ -4636,11 +4628,11 @@ HlsStreamCreatorPlus()
                 chnl_pid=$pid
                 action="stop"
                 SyncFile > /dev/null 2>> "$MONITOR_LOG"
-                until [ ! -d "$output_dir_root" ]
-                do
-                    rm -rf "$output_dir_root"
-                done
+                rm -rf $output_dir_root
             ' EXIT
+
+            exec {lock_fd}>"$FFMPEG_LOG_ROOT/$pid.lock" || exit 1
+            flock -n "$lock_fd" || { MonitorError "$channel_name $pid flock failed"; exit 1; }
 
             resolution=""
             output_name="${seg_name}_%05d"
@@ -4798,7 +4790,6 @@ HlsStreamCreatorPlus()
 
 HlsStreamCreator()
 {
-    force_exit=0
     trap '' HUP INT
     pid="$BASHPID"
     if [[ -n $($JQ_FILE '.channels[]|select(.pid=='"$pid"')' "$CHANNELS_FILE") ]] 
@@ -4886,11 +4877,11 @@ HlsStreamCreator()
                 chnl_pid=$pid
                 action="stop"
                 SyncFile > /dev/null 2>> "$MONITOR_LOG"
-                until [ ! -d "$output_dir_root" ]
-                do
-                    rm -rf "$output_dir_root"
-                done
+                rm -rf $output_dir_root
             ' EXIT
+
+            exec {lock_fd}>"$FFMPEG_LOG_ROOT/$pid.lock" || exit 1
+            flock -n "$lock_fd" || { MonitorError "$channel_name $pid flock failed"; exit 1; }
 
             if [ -n "$quality" ] 
             then
@@ -4935,11 +4926,11 @@ HlsStreamCreator()
                 chnl_pid=$new_pid
                 action="stop"
                 SyncFile > /dev/null 2>> "$MONITOR_LOG"
-                until [ ! -d "$chnl_output_dir_root" ]
-                do
-                    rm -rf "$chnl_output_dir_root"
-                done
+                rm -rf $chnl_output_dir_root
             ' EXIT
+
+            exec {lock_fd}>"$FFMPEG_LOG_ROOT/$new_pid.lock" || exit 1
+            flock -n "$lock_fd" || { MonitorError "$chnl_channel_name $new_pid flock failed"; exit 1; }
 
             if [ -n "$chnl_quality" ] 
             then
@@ -5032,11 +5023,11 @@ HlsStreamCreator()
                 chnl_pid=$pid
                 action="stop"
                 SyncFile > /dev/null 2>> "$MONITOR_LOG"
-                until [ ! -d "$output_dir_root" ]
-                do
-                    rm -rf "$output_dir_root"
-                done
+                rm -rf $output_dir_root
             ' EXIT
+
+            exec {lock_fd}>"$FFMPEG_LOG_ROOT/$pid.lock" || exit 1
+            flock -n "$lock_fd" || { MonitorError "$channel_name $pid flock failed"; exit 1; }
 
             if [ -n "$quality" ] 
             then
@@ -6486,6 +6477,7 @@ StartChannel()
         then
             rm -f "$FFMPEG_LOG_ROOT/$chnl_pid.log"
             rm -f "$FFMPEG_LOG_ROOT/$chnl_pid.err"
+            rm -f "$FFMPEG_LOG_ROOT/$chnl_pid.lock"
             if [ "$sh_debug" -eq 1 ] 
             then
                 ( FlvStreamCreatorWithShift ) > /dev/null 2>> "$MONITOR_LOG" < /dev/null &
@@ -6502,6 +6494,7 @@ StartChannel()
         fi
         rm -f "$FFMPEG_LOG_ROOT/$chnl_pid.log"
         rm -f "$FFMPEG_LOG_ROOT/$chnl_pid.err"
+        rm -f "$FFMPEG_LOG_ROOT/$chnl_pid.lock"
         if [ -n "${chnl_video_audio_shift:-}" ] || { [ "$chnl_encrypt_yn" == "yes" ] && [ "$chnl_live_yn" == "yes" ]; }
         then
             if [ "$sh_debug" -eq 1 ] 
@@ -6541,53 +6534,36 @@ StopChannel()
         Println "$error FLV 频道正开启，走错片场了？\n" && exit 1
     fi
 
+    Println "$info 关闭频道, 请稍等..."
     if [ "${kind:-}" == "flv" ] 
     then
-        if kill -0 "$chnl_pid" 2> /dev/null 
+        kill "$chnl_pid" 2> /dev/null || true
+
+        if ! flock -E 1 -w 30 -x "$FFMPEG_LOG_ROOT/$chnl_pid.lock" echo
         then
-            Println "$info 关闭频道, 请稍等..."
-            if kill "$chnl_pid" 2> /dev/null
-            then
-                until [ ! -f "/tmp/flv.lockdir/$chnl_pid" ]
-                do
-                    sleep 1
-                done
-            else
-                Println "$error 频道关闭失败, 请重试 !" && exit 1
-            fi
-        else
+            MonitorError "频道[ $chnl_channel_name ] 进程 $chnl_pid 不存在"
             JQ update "$CHANNELS_FILE" '(.channels[]|select(.pid=='"$chnl_pid"')|.flv_status)="off"'
             printf -v date_now '%(%m-%d %H:%M:%S)T'
             printf '%s\n' "$date_now $chnl_channel_name FLV 关闭" >> "$MONITOR_LOG"
             action="stop"
             SyncFile
-            rm -f "/tmp/flv.lockdir/$chnl_pid"
         fi
+        rm -f "$FFMPEG_LOG_ROOT/$chnl_pid.lock"
         chnl_flv_status="off"
     else
-        if kill -0 "$chnl_pid" 2> /dev/null 
+        kill "$chnl_pid" 2> /dev/null || true
+
+        if ! flock -E 1 -w 30 -x "$FFMPEG_LOG_ROOT/$chnl_pid.lock" rm -rf "$chnl_output_dir_root"
         then
-            Println "$info 关闭频道, 请稍等..."
-            if kill "$chnl_pid" 2> /dev/null 
-            then
-                until [ ! -d "$chnl_output_dir_root" ]
-                do
-                    sleep 1
-                done
-            else
-                Println "$error 频道关闭失败, 请重试 !\n" && exit 1
-            fi
-        else
+            MonitorError "频道[ $chnl_channel_name ] 进程 $chnl_pid 不存在"
             JQ update "$CHANNELS_FILE" '(.channels[]|select(.pid=='"$chnl_pid"')|.status)="off"'
             printf -v date_now '%(%m-%d %H:%M:%S)T'
             printf '%s\n' "$date_now $chnl_channel_name HLS 关闭" >> "$MONITOR_LOG"
             action="stop"
             SyncFile
-            until [ ! -d "$chnl_output_dir_root" ]
-            do
-                rm -rf "$chnl_output_dir_root"
-            done
+            rm -rf "$chnl_output_dir_root"
         fi
+        rm -f "$FFMPEG_LOG_ROOT/$chnl_pid.lock"
         chnl_status="off"
     fi
     Println "$info 频道[ $chnl_channel_name ]已关闭 !\n"
@@ -6698,6 +6674,7 @@ DelChannel()
         JQ delete "$CHANNELS_FILE" channels "$chnl_pid"
         rm -f "$FFMPEG_LOG_ROOT/$chnl_pid.log"
         rm -f "$FFMPEG_LOG_ROOT/$chnl_pid.err"
+        rm -f "$FFMPEG_LOG_ROOT/$chnl_pid.lock"
         Println "$info 频道[ $chnl_channel_name ]删除成功 !\n"
     done
 }
@@ -8658,7 +8635,7 @@ ScheduleExec()
                 fi
             fi
         done < <($JQ_FILE -r '.schedule[]|[.provider,(.chnls|sort|join("|")| if .=="" then "null" else . end),.option]|join("=")' "$CRON_FILE")
-        if [ -e "/tmp/vip.pid" ] 
+        if [ -e "$IPTV_ROOT/vip.pid" ] 
         then
             printf '%s' "" > "$VIP_USERS_ROOT/epg.update"
         fi
@@ -9528,7 +9505,7 @@ Schedule()
             elif [ -z "${schedule:-}" ] 
             then
                 Println "$error $2 failed !"
-            elif [ -e "/tmp/vip.pid" ] 
+            elif [ -e "$IPTV_ROOT/vip.pid" ] 
             then
                 printf '%s' "" > "$VIP_USERS_ROOT/epg.update"
             fi
@@ -10053,14 +10030,8 @@ AntiDDoS()
 {
     trap '' HUP INT
     trap 'MonitorError $LINENO' ERR
-    MONITOR_PIDFILE="/tmp/monitor.lockdir/$BASHPID"
-    force_exit=1
-    trap '
-        [ -e "$MONITOR_PIDFILE" ] && rm -f "$MONITOR_PIDFILE"
-    ' EXIT
 
-    mkdir -p "/tmp/monitor.lockdir" 
-    printf '%s' "" > "$MONITOR_PIDFILE"
+    printf '%s' "$BASHPID" > "$IPTV_ROOT/antiddos.pid"
 
     ips=()
     jail_time=()
@@ -10137,9 +10108,9 @@ AntiDDoS()
                 anti_ddos_syn_flood_ips+=("$anti_ddos_syn_flood_ip")
             done < <(ss -taH|awk '{gsub(/.*:/, "", $4);gsub(/:.*/, "", $5); if ($1 == "SYN-RECV" && $5 != "'"$current_ip"'" && ('"$anti_ddos_ports_command$anti_ddos_ports_range_command"')) print $5}')
 
-            PrepMonitorTerm
+            PrepTerm
             sleep "$anti_ddos_syn_flood_delay_seconds" &
-            WaitMonitorTerm
+            WaitTerm
 
             printf -v now '%(%s)T'
             jail=$((now + anti_ddos_syn_flood_seconds))
@@ -10277,7 +10248,9 @@ AntiDDoS()
             # awk -v d1="$(printf '%(%d/%b/%Y:%H:%M:%S)T' $((now-60)))" '{gsub(/^[\[\t]+/, "", $4); if ($7 ~ "'"$link"'" && $4 > d1 ) print $1;}' "$nginx_prefix"/logs/access.log | sort | uniq -c | sort -fr
         fi
 
-        sleep 10
+        PrepTerm
+        sleep 10 &
+        WaitTerm
 
         if [ -n "${ips:-}" ] 
         then
@@ -10572,10 +10545,10 @@ AntiDDoSSet()
 MonitorStop()
 {
     printf -v date_now '%(%m-%d %H:%M:%S)T'
-    if ! ls -A "/tmp/monitor.lockdir/"* > /dev/null 2>&1
+
+    # deprecated
+    if ls -A "/tmp/monitor.lockdir/"* > /dev/null 2>&1
     then
-        Println "$error 监控未启动 !\n"
-    else
         for PID in "/tmp/monitor.lockdir/"*
         do
             PID=${PID##*/}
@@ -10590,13 +10563,53 @@ MonitorStop()
 
         Println "$info 关闭监控, 稍等..."
 
-        until ! ls -A "/tmp/monitor.lockdir/"* > /dev/null 2>&1 
+        until ! ls -A "/tmp/monitor.lockdir/"* > /dev/null 2>&1
         do
             sleep 1
         done
 
         rm -rf "/tmp/monitor.lockdir/"
         Println "$info 监控关闭成功 !\n"
+    fi
+
+    if [ -s "$IPTV_ROOT/monitor.pid" ]
+    then
+        PID=$(< "$IPTV_ROOT/monitor.pid")
+        if kill -0 "$PID" 2> /dev/null 
+        then
+            Println "$info 关闭 HLS/FLV 监控, 稍等..."
+            kill "$PID" 2> /dev/null
+            if flock -E 1 -w 20 -x "$IPTV_ROOT/monitor.lock" rm "$IPTV_ROOT/monitor.pid" && echo -e "\n$info HLS/FLV 监控 关闭成功 !\n" 
+            then
+                printf '%s\n' "$date_now 关闭监控 PID $PID !" >> "$MONITOR_LOG"
+            else
+                Println "$error HLS/FLV 监控关闭超时, 请重试\n"
+                exit 1
+            fi
+        else
+            rm "$IPTV_ROOT/monitor.pid"
+        fi
+    else
+        Println "$error HLS/FLV 监控 未开启\n"
+    fi
+
+    if [ -s "$IPTV_ROOT/antiddos.pid" ] 
+    then
+        PID=$(< "$IPTV_ROOT/antiddos.pid")
+        if kill -0 "$PID" 2> /dev/null 
+        then
+            Println "$info 关闭 antiddos, 稍等..."
+            kill "$PID" 2> /dev/null
+            if flock -E 1 -w 20 -x "$IPTV_ROOT/antiddos.lock" rm "$IPTV_ROOT/antiddos.pid" && echo -e "\n$info antiddos 监控 关闭成功 !\n" 
+            then
+                printf '%s\n' "$date_now 关闭 antiddos PID $PID !" >> "$MONITOR_LOG"
+            else
+                Println "$error 监控关闭超时, 请重试\n"
+                exit 1
+            fi
+        else
+            rm "$IPTV_ROOT/antiddos.pid"
+        fi
     fi
 
     if [ -s "$IP_DENY" ] 
@@ -12362,10 +12375,8 @@ Monitor()
 {
     trap '' HUP INT
     trap 'MonitorError $LINENO' ERR
-    MONITOR_PIDFILE="/tmp/monitor.lockdir/$BASHPID"
-    force_exit=1
-    mkdir -p "/tmp/monitor.lockdir"
-    printf '%s' "" > "$MONITOR_PIDFILE"
+
+    printf '%s' "$BASHPID" > "$IPTV_ROOT/monitor.pid"
 
     mkdir -p "$LIVE_ROOT"
     printf '%s\n' "$date_now 监控启动成功 PID $BASHPID !" >> "$MONITOR_LOG"
@@ -12859,9 +12870,9 @@ Monitor()
             rand_restart_hls_done=1
         fi
 
-        PrepMonitorTerm
+        PrepTerm
         sleep 10 &
-        WaitMonitorTerm
+        WaitTerm
     done
 }
 
@@ -17452,10 +17463,12 @@ UpdateSelf()
         minor_ver=${d_version#*.}
         minor_ver=${minor_ver%%.*}
 
-        if [ "$major_ver" -eq 1 ] && [ "$minor_ver" -lt 25 ]
+        if [ "$major_ver" -eq 1 ] && [ "$minor_ver" -lt 27 ]
         then
             Println "$info 需要先关闭所有频道，请稍等...\n"
             StopChannelsForce
+            rm -rf "/tmp/flv.lockdir/"
+            rm -rf "/tmp/monitor.lockdir"
         fi
         Println "$info 更新中，请稍等...\n"
         printf -v update_date '%(%m-%d)T'
@@ -23922,6 +23935,18 @@ func main() {
 UpdateSh()
 {
     Println "$info 更新脚本 ..."
+    sh_new_ver=$(wget --no-check-certificate -qO- -t1 -T3 "$SH_LINK"|grep 'sh_ver="'|awk -F "=" '{print $NF}'|sed 's/\"//g'|head -1) || true
+    if [ -z "$sh_new_ver" ] 
+    then
+        Println "$error 无法连接到 Github ! 尝试备用链接..."
+        sh_new_ver=$(wget --no-check-certificate -qO- -t1 -T3 "$SH_LINK_BACKUP"|grep 'sh_ver="'|awk -F "=" '{print $NF}'|sed 's/\"//g'|head -1) || true
+        [ -z "$sh_new_ver" ] && Println "$error 无法连接备用链接!" && exit 1
+    fi
+
+    if [ "$sh_new_ver" != "$sh_ver" ] 
+    then
+        rm -f "$LOCK_FILE"
+    fi
 
     if ! wget --timeout=10 --tries=3 --no-check-certificate "$SH_LINK" -qO "$SH_FILE" && ! wget --timeout=10 --tries=3 --no-check-certificate "$SH_LINK_BACKUP" -qO "$SH_FILE"
     then
@@ -24502,10 +24527,32 @@ EditCloudflareWorker()
                     break
                 elif [ -d "$CF_WORKERS_ROOT/$cf_worker_path_new" ] 
                 then
-                    Println "$error 路径已经存在\n"
-                    continue
+                    Println "$error 路径已经存在, 是否仍要修改 ? [y/N]"
+                    read -p "(默认: N): " force_edit_yn
+                    force_edit_yn=${force_edit_yn:-N}
+                    if [[ $force_edit_yn == [Nn] ]] 
+                    then
+                        continue
+                    else
+                        if [ -d "$CF_WORKERS_ROOT/$cf_worker_path" ] 
+                        then
+                            Println "$error 是否删除原路径目录 ? [y/N]"
+                            read -p "(默认: N): " delete_old_path_yn
+                            delete_old_path_yn=${delete_old_path_yn:-N}
+                            if [[ $delete_old_path_yn == [Yy] ]] 
+                            then
+                                rm -rf "$CF_WORKERS_ROOT/${cf_worker_path:-notfound}"
+                            fi  
+                        fi
+                        break
+                    fi
                 else
-                    mv "$CF_WORKERS_ROOT/$cf_worker_path" "$CF_WORKERS_ROOT/$cf_worker_path_new"
+                    if [ "$cf_worker_path" == "stream_proxy" ] || [ "$cf_worker_path" == "xc_proxy" ]
+                    then
+                        cp -r "$CF_WORKERS_ROOT/$cf_worker_path" "$CF_WORKERS_ROOT/$cf_worker_path_new"
+                    else
+                        mv "$CF_WORKERS_ROOT/$cf_worker_path" "$CF_WORKERS_ROOT/$cf_worker_path_new"
+                    fi
                     break
                 fi
             ;;
@@ -24702,6 +24749,7 @@ DeployCloudflareWorker()
                     cf_user_email=${cf_users_email[cf_users_index]}
                     cf_user_pass=${cf_users_pass[cf_users_index]}
                     cf_user_token=${cf_users_token[cf_users_index]}
+                    cf_user_key=${cf_users_key[cf_users_index]}
                     break
                 else
                     Println "$error 请输入正确的序号\n"
@@ -24710,147 +24758,159 @@ DeployCloudflareWorker()
         esac
     done
 
-    if [ -n "$cf_user_token" ] 
+    if [ -z "$cf_user_token" ] 
     then
-        CF_ACCOUNT_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/accounts" \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $cf_user_token" \
-            | $JQ_FILE -r '.result[0].id'
-        ) || true
-        if [ -z "$CF_ACCOUNT_ID" ] || [ "$CF_ACCOUNT_ID" == null ]
+        Println "$info 尝试获取用户 Token ..."
+
+        if [[ ! -x $(command -v python3) ]] 
         then
-            Println "$error 无法获取用户 ID, Token 错误 ?\n"
-            exit 1
+            Println "$info 安装 python3 ..."
+            InstallPython
         fi
-        if [ "$cf_worker_path" == "stream_proxy" ] 
+
+        Println "$info 更新 ${CF_WORKERS_FILE##*/}"
+        wget --timeout=10 --tries=3 --no-check-certificate "$FFMPEG_MIRROR_LINK/${CF_WORKERS_FILE##*/}" -qO "$CF_WORKERS_FILE"
+
+        cf_user_token=$(python3 \
+            "$CF_WORKERS_FILE" -e "$cf_user_email" -p "$cf_user_pass" -o api_token
+        ) || cf_user_token=""
+        if [ -z "$cf_user_token" ] 
         then
-            if [ -s "$IBM_CONFIG" ] 
+            Println "$error 无法获取用户 ID, 账号或密码错误 或者 cloudflare 暂时限制登录\n"
+            exit 1
+        else
+            cf_users_token[cf_users_index]=$cf_user_token
+
+            new_user=$(
+            $JQ_FILE -n --arg email "$cf_user_email" --arg pass "$cf_user_pass" \
+                --arg token "$cf_user_token" --arg key "$cf_user_key" \
+                '{
+                    email: $email,
+                    pass: $pass,
+                    token: $token,
+                    key: $key
+                }'
+            )
+
+            jq_path='["users",'"$cf_users_index"']'
+            JQ replace "$CF_CONFIG" "$new_user"
+            Println "$info 获取用户 $cf_user_email Token 成功"
+        fi
+    fi
+
+    CF_ACCOUNT_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/accounts" \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $cf_user_token" \
+        | $JQ_FILE -r '.result[0].id'
+    ) || true
+    if [ -z "$CF_ACCOUNT_ID" ] || [ "$CF_ACCOUNT_ID" == null ]
+    then
+        Println "$error 无法获取用户 ID, Token 错误 ?\n"
+        exit 1
+    fi
+
+    if [ "$cf_worker_path" == "stream_proxy" ] 
+    then
+        if [ -s "$IBM_CONFIG" ] 
+        then
+            GetIbmcfApps
+            if [ "$ibm_cf_apps_count" -gt 0 ] 
             then
-                GetIbmcfApps
-                if [ "$ibm_cf_apps_count" -gt 0 ] 
+                Println "$info 是否使用 IBM CF APP 中转 [Y/n]"
+                read -p "(默认: Y): " use_ibm_cf_app_yn
+                use_ibm_cf_app_yn=${use_ibm_cf_app_yn:-Y}
+                if [[ "$use_ibm_cf_app_yn" == [Yy] ]] 
                 then
-                    Println "$info 是否使用 IBM CF APP 中转 [Y/n]"
-                    read -p "(默认: Y): " use_ibm_cf_app_yn
-                    use_ibm_cf_app_yn=${use_ibm_cf_app_yn:-Y}
-                    if [[ "$use_ibm_cf_app_yn" == [Yy] ]] 
-                    then
-                        ListIbmcfApps
-                        echo -e "选择 APP"
-                        while read -p "(默认: 取消): " ibm_cf_apps_num
-                        do
-                            case "$ibm_cf_apps_num" in
-                                "")
-                                    Println "已取消...\n" && exit 1
-                                ;;
-                                *[!0-9]*)
+                    ListIbmcfApps
+                    echo -e "选择 APP"
+                    while read -p "(默认: 取消): " ibm_cf_apps_num
+                    do
+                        case "$ibm_cf_apps_num" in
+                            "")
+                                Println "已取消...\n" && exit 1
+                            ;;
+                            *[!0-9]*)
+                                Println "$error 请输入正确的序号\n"
+                            ;;
+                            *)
+                                if [ "$ibm_cf_apps_num" -gt 0 ] && [ "$ibm_cf_apps_num" -le "$ibm_cf_apps_count" ]
+                                then
+                                    ibm_cf_apps_index=$((ibm_cf_apps_num-1))
+                                    ibm_cf_app_name=${ibm_cf_apps_name[ibm_cf_apps_index]}
+                                    ibm_user_email=${ibm_cf_apps_user_email[ibm_cf_apps_index]}
+                                    ibm_cf_app_routes_count=${ibm_cf_apps_routes_count[ibm_cf_apps_index]}
+                                    ibm_cf_app_route_hostname=${ibm_cf_apps_route_hostname[ibm_cf_apps_index]}
+                                    ibm_cf_app_route_port=${ibm_cf_apps_route_port[ibm_cf_apps_index]}
+                                    ibm_cf_app_route_domain=${ibm_cf_apps_route_domain[ibm_cf_apps_index]}
+                                    ibm_cf_app_route_path=${ibm_cf_apps_route_path[ibm_cf_apps_index]}
+                                    IFS="|" read -r -a ibm_cf_app_routes_hostname <<< "$ibm_cf_app_route_hostname"
+                                    IFS="|" read -r -a ibm_cf_app_routes_port <<< "$ibm_cf_app_route_port"
+                                    IFS="|" read -r -a ibm_cf_app_routes_domain <<< "$ibm_cf_app_route_domain"
+                                    IFS="|" read -r -a ibm_cf_app_routes_path <<< "${ibm_cf_app_route_path}|"
+                                    break
+                                else
                                     Println "$error 请输入正确的序号\n"
-                                ;;
-                                *)
-                                    if [ "$ibm_cf_apps_num" -gt 0 ] && [ "$ibm_cf_apps_num" -le "$ibm_cf_apps_count" ]
-                                    then
-                                        ibm_cf_apps_index=$((ibm_cf_apps_num-1))
-                                        ibm_cf_app_name=${ibm_cf_apps_name[ibm_cf_apps_index]}
-                                        ibm_user_email=${ibm_cf_apps_user_email[ibm_cf_apps_index]}
-                                        ibm_cf_app_routes_count=${ibm_cf_apps_routes_count[ibm_cf_apps_index]}
-                                        ibm_cf_app_route_hostname=${ibm_cf_apps_route_hostname[ibm_cf_apps_index]}
-                                        ibm_cf_app_route_port=${ibm_cf_apps_route_port[ibm_cf_apps_index]}
-                                        ibm_cf_app_route_domain=${ibm_cf_apps_route_domain[ibm_cf_apps_index]}
-                                        ibm_cf_app_route_path=${ibm_cf_apps_route_path[ibm_cf_apps_index]}
-                                        IFS="|" read -r -a ibm_cf_app_routes_hostname <<< "$ibm_cf_app_route_hostname"
-                                        IFS="|" read -r -a ibm_cf_app_routes_port <<< "$ibm_cf_app_route_port"
-                                        IFS="|" read -r -a ibm_cf_app_routes_domain <<< "$ibm_cf_app_route_domain"
-                                        IFS="|" read -r -a ibm_cf_app_routes_path <<< "${ibm_cf_app_route_path}|"
-                                        break
-                                    else
-                                        Println "$error 请输入正确的序号\n"
-                                    fi
-                                ;;
-                            esac
-                        done
+                                fi
+                            ;;
+                        esac
+                    done
 
-                        ibm_cf_apps_list=""
-                        ibm_cf_apps_link=()
-                        for((i=0;i<ibm_cf_app_routes_count;i++));
-                        do
-                            if [ -n "${ibm_cf_app_routes_path[i]}" ] 
-                            then
-                                path="/${ibm_cf_app_routes_path[i]}"
-                            else
-                                path=""
-                            fi
-                            upstream="${ibm_cf_app_routes_hostname[i]}.${ibm_cf_app_routes_domain[i]}$path"
-                            ibm_cf_apps_link+=("$upstream")
-                            ibm_cf_apps_list="$ibm_cf_apps_list $green$((i+1)).$plain\r\e[6C$upstream\n\n"
-                        done
+                    ibm_cf_apps_list=""
+                    ibm_cf_apps_link=()
+                    for((i=0;i<ibm_cf_app_routes_count;i++));
+                    do
+                        if [ -n "${ibm_cf_app_routes_path[i]}" ] 
+                        then
+                            path="/${ibm_cf_app_routes_path[i]}"
+                        else
+                            path=""
+                        fi
+                        upstream="${ibm_cf_app_routes_hostname[i]}.${ibm_cf_app_routes_domain[i]}$path"
+                        ibm_cf_apps_link+=("$upstream")
+                        ibm_cf_apps_list="$ibm_cf_apps_list $green$((i+1)).$plain\r\e[6C$upstream\n\n"
+                    done
 
-                        Println "$ibm_cf_apps_list"
+                    Println "$ibm_cf_apps_list"
 
-                        echo -e "选择链接"
-                        while read -p "(默认: 取消): " ibm_cf_apps_link_num 
-                        do
-                            case $ibm_cf_apps_link_num in
-                                "") 
-                                    Println "已取消 ...\n"
-                                    exit 1
-                                ;;
-                                *[!0-9]*) 
+                    echo -e "选择链接"
+                    while read -p "(默认: 取消): " ibm_cf_apps_link_num 
+                    do
+                        case $ibm_cf_apps_link_num in
+                            "") 
+                                Println "已取消 ...\n"
+                                exit 1
+                            ;;
+                            *[!0-9]*) 
+                                Println "$error 请输入正确的序号\n"
+                            ;;
+                            *) 
+                                if [ "$ibm_cf_apps_link_num" -gt 0 ] && [ "$ibm_cf_apps_link_num" -le "$ibm_cf_app_routes_count" ] 
+                                then
+                                    ibm_cf_apps_link_index=$((ibm_cf_apps_link_num-1))
+                                    upstream=${ibm_cf_apps_link[ibm_cf_apps_link_index]}
+                                    break
+                                else
                                     Println "$error 请输入正确的序号\n"
-                                ;;
-                                *) 
-                                    if [ "$ibm_cf_apps_link_num" -gt 0 ] && [ "$ibm_cf_apps_link_num" -le "$ibm_cf_app_routes_count" ] 
-                                    then
-                                        ibm_cf_apps_link_index=$((ibm_cf_apps_link_num-1))
-                                        upstream=${ibm_cf_apps_link[ibm_cf_apps_link_index]}
-                                        break
-                                    else
-                                        Println "$error 请输入正确的序号\n"
-                                    fi
-                                ;;
-                            esac
-                        done
-                    fi
+                                fi
+                            ;;
+                        esac
+                    done
                 fi
             fi
-            if [ -z "${upstream:-}" ] 
-            then
-                Println "$info 输入源站 ip 或者 中转服务器的域名(比如 IBM CF APP 的域名)"
-                read -p "(默认: 取消): " upstream
-                [ -z "$upstream" ] && Println "已取消 ...\n" && exit 1
-            fi
-            sed -i 's/const upstream = .*/const upstream = "'"$upstream"'"/' "$CF_WORKERS_ROOT/$cf_worker_path/index.js"
         fi
-
-        cd "$CF_WORKERS_ROOT/$cf_worker_path"
-        sed -i 's/account_id = .*/account_id = "'"$CF_ACCOUNT_ID"'"/' "$CF_WORKERS_ROOT/$cf_worker_path/wrangler.toml"
-        sed -i 's/name = .*/name = "'"$cf_worker_project_name"'"/' "$CF_WORKERS_ROOT/$cf_worker_path/wrangler.toml"
-        CF_API_TOKEN=$cf_user_token wrangler publish || Println "$error 请检查 Token 权限\n"
-        exit 0
-    else
-        Println "$error 请先添加此用户的 Token\n"
-        exit 1
+        if [ -z "${upstream:-}" ] 
+        then
+            Println "$info 输入源站 ip 或者 中转服务器的域名(比如 IBM CF APP 的域名)"
+            read -p "(默认: 取消): " upstream
+            [ -z "$upstream" ] && Println "已取消 ...\n" && exit 1
+        fi
+        sed -i 's/const upstream = .*/const upstream = "'"$upstream"'"/' "$CF_WORKERS_ROOT/$cf_worker_path/index.js"
     fi
 
-    if [[ ! -x $(command -v python3) ]] 
-    then
-        Println "$info 安装 python3 ..."
-        InstallPython
-    fi
-
-    Println "$info 尝试使用账号和密码部署"
-    if [ ! -e "$CF_WORKERS_FILE" ] 
-    then
-        Println "$info 下载 ${CF_WORKERS_FILE##*/}"
-        wget --timeout=10 --tries=3 --no-check-certificate "$FFMPEG_MIRROR_LINK/${CF_WORKERS_FILE##*/}" -qO "$CF_WORKERS_FILE"
-    fi
-    IFS="=" read -r success CF_ACCOUNT_ID < <(python3 \
-        "$CF_WORKERS_FILE" -e "$cf_user_email" -p "$cf_user_pass" -o account_id \
-        | $JQ_FILE -r '[.success,.result[0].account.id]|join("=")'
-    ) || true
-    if [ "${success:-false}" == "false" ] 
-    then
-        Println "$error 无法获取用户 ID, 账号或密码错误 或者 cloudflare 暂时限制登录\n"
-        exit 1
-    fi
+    cd "$CF_WORKERS_ROOT/$cf_worker_path"
+    sed -i 's/account_id = .*/account_id = "'"$CF_ACCOUNT_ID"'"/' "$CF_WORKERS_ROOT/$cf_worker_path/wrangler.toml"
+    sed -i 's/name = .*/name = "'"$cf_worker_project_name"'"/' "$CF_WORKERS_ROOT/$cf_worker_path/wrangler.toml"
+    CF_API_TOKEN=$cf_user_token wrangler publish || Println "$error 请检查 Token 权限\n"
 }
 
 ListCloudflareWorkersRoutes()
@@ -25402,54 +25462,13 @@ MonitorCloudflareWorkersDeploy()
     done
 }
 
-PrepMonitorTerm()
-{
-    unset term_child_pid
-    unset term_kill_needed
-    trap 'HandleMonitorTerm 2> /dev/null' TERM
-}
-
-HandleMonitorTerm()
-{
-    if [ -n "${term_child_pid:-}" ]
-    then
-        if [ "${force_exit:-0}" -eq 1 ] 
-        then
-            kill -9 "$term_child_pid"
-            kill -TERM "$term_child_pid"
-        fi
-    else
-        term_kill_needed="yes"
-    fi
-    [ -e "${MONITOR_PIDFILE:-notfound}" ] && rm "$MONITOR_PIDFILE"
-    [ -d "${MONITOR_ROOT:-notfound}" ] && rm -rf "$MONITOR_ROOT"
-}
-
-WaitMonitorTerm()
-{
-    term_child_pid=$!
-    if [ -n "${term_kill_needed:-}" ]
-    then
-        if [ "${force_exit:-0}" -eq 1 ] 
-        then
-            kill -9 "$term_child_pid"
-        else
-            kill -TERM "$term_child_pid"
-        fi
-    fi
-    wait $term_child_pid
-    trap - TERM
-    wait $term_child_pid
-}
-
 MonitorCloudflareWorkers()
 {
     trap '' HUP INT
     trap 'MonitorError $LINENO' ERR
-    MONITOR_PIDFILE="/tmp/cf_workers.pid"
-    force_exit=1
-    mkdir -p "/tmp" 
-    printf '%s' "$BASHPID" > "/tmp/cf_workers.pid"
+
+    printf '%s' "$BASHPID" > "$CF_WORKERS_ROOT/cf_workers.pid"
+
     printf -v date_now '%(%m-%d %H:%M:%S)T'
     printf '%s\n' "$date_now 启动 workers 监控  PID $BASHPID !" >> "$MONITOR_LOG"
 
@@ -25633,9 +25652,9 @@ MonitorCloudflareWorkers()
             done
         fi
 
-        PrepMonitorTerm
+        PrepTerm
         sleep "$cf_workers_monitor_seconds" &
-        WaitMonitorTerm
+        WaitTerm
 
         GetCloudflareUsers
     done
@@ -25643,7 +25662,13 @@ MonitorCloudflareWorkers()
 
 EnableCloudflareWorkersMonitor()
 {
+    # deprecated
     if [ -s "/tmp/cf_workers.pid" ] && kill -0 "$(< /tmp/cf_workers.pid)" 2> /dev/null
+    then
+        Println "$error workers 监控已开启\n" && exit 1
+    fi
+
+    if [ -s "$CF_WORKERS_ROOT/cf_workers.pid" ] && kill -0 "$(< $CF_WORKERS_ROOT/cf_workers.pid)" 2> /dev/null
     then
         Println "$error workers 监控已开启\n" && exit 1
     fi
@@ -25774,19 +25799,6 @@ EnableCloudflareWorkersMonitor()
                         history_index=$((history_num-1))
                         pair=${workers_monitor_stream_proxy_pairs[history_index]}
                         IFS="|" read -r -a pairs <<< "$pair"
-                        for project_name in "${workers_project_name[@]}"
-                        do
-                            for pair in "${pairs[@]}"
-                            do
-                                if [ "${pair% *}" == "$project_name" ] 
-                                then
-                                    sed -i 's/const upstream = .*/const upstream = "'"${pair#* }"'"/' "$CF_WORKERS_ROOT/stream_proxy/index.js"
-                                    worker_data=$(< "$CF_WORKERS_ROOT/stream_proxy/index.js")
-                                    workers_data+=("$worker_data")
-                                    break
-                                fi
-                            done
-                        done
                         break
                     else
                         Println "$error 请输入正确的序号\n"
@@ -26138,17 +26150,23 @@ EnableCloudflareWorkersMonitor()
     fi
 
     [ ! -d "${MONITOR_LOG%/*}" ] && MONITOR_LOG="$CF_WORKERS_ROOT/monitor.log"
+
+    exec {cf_workers_lock_fd}>"$CF_WORKERS_ROOT/cf_workers.lock" || exit 1
+    flock -n "$cf_workers_lock_fd" || { Println "$error 监控开启失败, 请重试 ...\n"; exit 1; }
+
     if [ "$sh_debug" -eq 1 ] 
     then
         ( MonitorCloudflareWorkers ) &
     else
         ( MonitorCloudflareWorkers ) > /dev/null 2>> "$MONITOR_LOG" &
     fi
+
     Println "$info workers 监控开启成功\n"
 }
 
 DisableCloudflareWorkersMonitor()
 {
+    # deprecated
     if [ -s "/tmp/cf_workers.pid" ] 
     then
         cf_workers_pid=$(< /tmp/cf_workers.pid)
@@ -26158,13 +26176,27 @@ DisableCloudflareWorkersMonitor()
             printf -v date_now '%(%m-%d %H:%M:%S)T'
             [ ! -d "${MONITOR_LOG%/*}" ] && MONITOR_LOG="$CF_WORKERS_ROOT/monitor.log"
             printf '%s\n' "$date_now 关闭 workers 监控 PID $cf_workers_pid !" >> "$MONITOR_LOG"
-            Println "$info 关闭 workers 监控, 稍等..."
-            until [ ! -e "/tmp/cf_workers.pid" ]
-            do
-                sleep 1
-            done
             Println "$info workers 监控 关闭成功\n"
         else
+            Println "$error workers 监控 未开启\n"
+        fi
+    elif [ -s "$CF_WORKERS_ROOT/cf_workers.pid" ]
+    then
+        PID=$(< "$CF_WORKERS_ROOT/cf_workers.pid")
+        if kill -0 "$PID" 2> /dev/null 
+        then
+            Println "$info 关闭 workers 监控, 稍等..."
+            kill "$PID" 2> /dev/null
+            if flock -E 1 -w 20 -x "$CF_WORKERS_ROOT/cf_workers.lock" rm "$CF_WORKERS_ROOT/cf_workers.pid" && echo -e "\n$info workers 监控 关闭成功 !\n" 
+            then
+                printf -v date_now '%(%m-%d %H:%M:%S)T'
+                printf '%s\n' "$date_now 关闭监控 PID $PID !" >> "$MONITOR_LOG"
+            else
+                Println "$error workers 监控 关闭超时, 请重试\n"
+                exit 1
+            fi
+        else
+            rm "$CF_WORKERS_ROOT/cf_workers.pid"
             Println "$error workers 监控 未开启\n"
         fi
     else
@@ -26695,7 +26727,7 @@ then
             Println "$info 检查依赖，耗时可能会很长..."
             CheckRelease
 
-            if ! ls -A "/tmp/monitor.lockdir/"* > /dev/null 2>&1 
+            if [ ! -s "$IPTV_ROOT/monitor.pid" ] && [ ! -s "$IPTV_ROOT/antiddos.pid" ]
             then
                 rm -f "${JQ_FILE:-notfound}"
                 Println "$info 更新 JQ...\n"
@@ -27038,7 +27070,7 @@ then
                     fi
                 ;;
                 *) 
-                    if ls -A "/tmp/monitor.lockdir/"* > /dev/null 2>&1
+                    if [ -s "$IPTV_ROOT/monitor.pid" ] || [ -s "$IPTV_ROOT/antiddos.pid" ]
                     then
                         Println "$error 监控已经在运行 !\n" && exit 1
                     else
@@ -27070,21 +27102,30 @@ then
                         NGINX_FILE="$nginx_prefix/sbin/nginx"
                         printf -v date_now '%(%m-%d %H:%M:%S)T'
                         MonitorSet
+
+                        exec {monitor_lock_fd}>"$IPTV_ROOT/monitor.lock" || exit 1
+                        flock -n "$monitor_lock_fd" || { Println "$error 监控开启失败, 请重试 ...\n"; exit 1; }
+
                         if [ "$sh_debug" -eq 1 ] 
                         then
                             ( Monitor ) >> "$MONITOR_LOG" 2>> "$MONITOR_LOG" < /dev/null &
                         else
                             ( Monitor ) > /dev/null 2>> "$MONITOR_LOG" < /dev/null &
                         fi
+
                         Println "$info 监控启动成功 !"
-                        [ -e "$IPTV_ROOT/monitor.pid" ] && rm -f "$IPTV_ROOT/monitor.pid"
                         AntiDDoSSet
+
+                        exec {antiddos_lock_fd}>"$IPTV_ROOT/antiddos.lock" || exit 1
+                        flock -n "$antiddos_lock_fd" || { Println "$error AntiDDoS 开启失败, 请重试 ...\n"; exit 1; }
+
                         if [ "$sh_debug" -eq 1 ] 
                         then
                             ( AntiDDoS ) >> "$MONITOR_LOG" 2>> "$MONITOR_LOG" < /dev/null &
                         else
                             ( AntiDDoS ) > /dev/null 2>> "$MONITOR_LOG" < /dev/null &
                         fi
+
                         Println "$info AntiDDoS 启动成功 !\n"
                         [ -e "$IPTV_ROOT/ip.pid" ] && rm -f "$IPTV_ROOT/ip.pid"
                     fi
@@ -28912,12 +28953,12 @@ MonitorVip()
 {
     trap '' HUP INT
     trap 'MonitorError $LINENO' ERR
-    MONITOR_PIDFILE="/tmp/vip.pid"
-    MONITOR_ROOT="${vip_public_root:-notfound}/vip"
-    force_exit=1
+    trap '
+        rm "${vip_public_root:-notfound}/vip"
+    ' EXIT
 
-    mkdir -p "/tmp" 
-    printf '%s' "$BASHPID" > "/tmp/vip.pid"
+    printf '%s' "$BASHPID" > "$IPTV_ROOT/vip.pid"
+
     printf -v date_now '%(%m-%d %H:%M:%S)T'
     printf '%s\n' "$date_now 启动 VIP  PID $BASHPID !" >> "$MONITOR_LOG"
     printf -v now '%(%s)T'
@@ -29072,9 +29113,9 @@ MonitorVip()
             done
         fi
 
-        PrepMonitorTerm
+        PrepTerm
         sleep 60 &
-        WaitMonitorTerm
+        WaitTerm
 
         vip_users_license_old=("${vip_users_license[@]}")
         vip_hosts_channel_id_old=("${vip_hosts_channel_id[@]}")
@@ -29121,9 +29162,20 @@ MonitorVip()
 
 EnableVip()
 {
+    # deprecated
     if [ -s "/tmp/vip.pid" ] && kill -0 "$(< /tmp/vip.pid)" 2> /dev/null
     then
         Println "$error VIP 已开启\n" && exit 1
+    fi
+
+    if [ -s "$IPTV_ROOT/vip.pid" ] && kill -0 "$(< $IPTV_ROOT/vip.pid)" 2> /dev/null
+    then
+        Println "$error VIP 已开启\n" && exit 1
+    fi
+
+    if [ ! -s "$VIP_FILE" ] 
+    then
+        Println "$error 请先添加 VIP 服务器\n" && exit 1
     fi
 
     GetVipHosts
@@ -29157,7 +29209,12 @@ EnableVip()
                 ConfigVip
             fi
             [ -n "$vip_public_root" ] && ln -sfT "$VIP_USERS_ROOT" "$vip_public_root/vip"
+
+            exec {vip_monitor_lock_fd}>"$IPTV_ROOT/vip.lock" || exit 1
+            flock -n "$vip_monitor_lock_fd" || { Println "$error VIP 开启失败, 请重试 ...\n"; exit 1; }
+
             ( MonitorVip ) > /dev/null 2>> "$MONITOR_LOG" &
+
             Println "$info VIP 开启成功\n"
         else
             Println "$error 请先添加用户\n" && exit 1
@@ -29169,6 +29226,7 @@ EnableVip()
 
 DisableVip()
 {
+    # deprecated
     if [ -s "/tmp/vip.pid" ] 
     then
         vip_pid=$(< /tmp/vip.pid)
@@ -29177,13 +29235,28 @@ DisableVip()
             kill "$vip_pid" 2> /dev/null
             printf -v date_now '%(%m-%d %H:%M:%S)T'
             printf '%s\n' "$date_now 关闭 VIP  PID $vip_pid !" >> "$MONITOR_LOG"
-            Println "$info 关闭 VIP, 稍等..."
-            until [ ! -e "/tmp/vip.pid" ]
-            do
-                sleep 1
-            done
             Println "$info VIP 关闭成功\n"
         else
+            Println "$error VIP 未开启\n"
+        fi
+        rm "/tmp/vip.pid"
+    elif [ -s "$IPTV_ROOT/vip.pid" ] 
+    then
+        PID=$(< "$IPTV_ROOT/vip.pid")
+        if kill -0 "$PID" 2> /dev/null 
+        then
+            Println "$info 关闭 VIP, 稍等..."
+            kill "$PID" 2> /dev/null
+            if flock -E 1 -w 20 -x "$IPTV_ROOT/vip.lock" rm "$IPTV_ROOT/vip.pid" && echo -e "\n$info VIP 关闭成功 !\n"
+            then
+                printf -v date_now '%(%m-%d %H:%M:%S)T'
+                printf '%s\n' "$date_now 关闭 VIP PID $PID !" >> "$MONITOR_LOG"
+            else
+                Println "$error VIP 关闭超时, 请重试\n"
+                exit 1
+            fi
+        else
+            rm "$IPTV_ROOT/vip.pid"
             Println "$error VIP 未开启\n"
         fi
     else
